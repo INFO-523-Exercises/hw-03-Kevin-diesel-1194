@@ -1,0 +1,1136 @@
+---
+title: "Hw3"
+author: "Vinu Kevin Diesel"
+format: html
+editor: visual
+---
+
+# **Classification: Basic Concepts and Techniques**
+
+## **Install packages**
+
+```{r}
+if(!require(pacman))
+  install.packages("pacman")
+
+pacman::p_load(tidyverse, rpart, rpart.plot, caret, 
+  lattice, FSelector, sampling, pROC, mlbench)
+```
+
+## The Data
+
+```{r}
+# Option 1: tidytuesdayR package 
+## install.packages("tidytuesdayR")
+
+#tuesdata <- tidytuesdayR::tt_load('2023-08-15')
+## OR
+#tuesdata <- tidytuesdayR::tt_load(2023, week = 33)
+
+
+#spam <- tuesdata$spam
+
+# Option 2: Read directly from GitHub
+
+spam <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2023/2023-08-15/spam.csv')
+
+```
+
+```{r}
+#Converting all the nominal to factor, in this case there is none.
+
+spam <- spam |>
+  mutate(across(where(is.logical), factor)) |>
+  mutate(across(where(is.character), factor))
+
+
+```
+
+## **Decision Trees**
+
+```{r}
+library(rpart)
+```
+
+### **Create Tree With Default Settings (uses pre-pruning)**
+
+```{r}
+tree_default <- spam |> 
+  rpart(yesno ~ crl.tot+dollar+bang+money+n000+make, data = _)
+
+# Observation 
+
+#Here we are, fitting a decision tree model where yesno is the target variable, and it's trying to predict it based on the values of the other specified variables (crl.tot, dollar, bang, money, n000, and make) using the rpart function. The resulting decision tree is stored in the tree_default variable.
+```
+
+Plotting
+
+```{r}
+library(rpart.plot)
+rpart.plot(tree_default, extra = 2)
+
+#Plotting the decision tree
+```
+
+from the above tree, using dollar, bang, crl.tot we arrive to the decisions. firstly, if the dollar feature's value is greater than 0.056, then it is yes which means it is a spam. If not, it goes to the bang node and checks the value,if it is less than 0.092 it is a no which means it is not a spam. If not, it goes further to crl.tot node, where again it checks the crl.tot feature's value. If it is not less than 86, it is yes else it goes to bang node and checks it value. If it is not less than, then it is yes, else it is no.
+
+### **Create a Full Tree**
+
+```{r}
+tree_full <- spam |> 
+  rpart(yesno ~ crl.tot+dollar+bang+money+n000+make, data = _, 
+        control = rpart.control(minsplit = 2, cp = 0))
+rpart.plot(tree_full, extra = 2, 
+           roundint=FALSE,,
+            box.palette = list("Gy", "Gn", "Bu", "Bn", 
+                               "Or", "Rd", "Pu")) 
+```
+
+The above decision tree takes almost all features and gives a decision due to the complexity parameter cp being set to 0 and we set the minimum number of observations in a node needed to split to the smallest value of 2. This overfit the training data.
+
+```{r}
+tree_full
+```
+
+Training error on tree with pre-pruning
+
+```{r}
+predict(tree_default, spam) |> head ()
+```
+
+Class predictions
+
+```{r}
+pred <- predict(tree_default, spam, type="class")
+head(pred)
+```
+
+Confusion matrices for prediction, true values, correct and incorrect values
+
+```{r}
+confusion_table <- with(spam, table(yesno, pred))
+confusion_table
+```
+
+```{r}
+correct <- confusion_table |> diag() |> sum()
+correct
+```
+
+```{r}
+error <- confusion_table |> sum() - correct
+error
+```
+
+Calculating accuracy
+
+```{r}
+accuracy <- correct / (correct + error)
+accuracy
+```
+
+Using a function for finding accuracy
+
+```{r}
+accuracy <- function(truth, prediction) {
+    tbl <- table(truth, prediction)
+    sum(diag(tbl))/sum(tbl)
+}
+
+accuracy(spam |> pull(yesno), pred)
+```
+
+Training error of full tree
+
+```{r}
+accuracy(spam |> pull(yesno), 
+         predict(tree_full, spam, type = "class"))
+```
+
+Getting a confusion table with more statistics (using caret)
+
+```{r}
+library(caret)
+confusionMatrix(data = pred, 
+                reference = spam |> pull(yesno))
+```
+
+### **Make Predictions for New Data**
+
+Make up my own sequence of digits and special characters as spam
+
+```{r}
+my_spam <- tibble(crl.tot = 20, dollar = 0.5, bang = 0.6, money = 0.3, n000 = 0.9, make = 0.8)
+```
+
+Making a prediction using tree default
+
+```{r}
+predict(tree_default , my_spam, type = "class")
+```
+
+## **Model Evaluation with Caret**
+
+```{r}
+library(caret)
+```
+
+Set random number generator seed to make results reproducible
+
+```{r}
+set.seed(2000)
+```
+
+### **Hold out Test Data**
+
+```{r}
+library(dplyr)
+inTrain <- createDataPartition(y = spam$yesno, p = .8, list = FALSE)
+spam_train <- spam |> slice(inTrain)
+
+#We are splitting the dataset into testing and training sets with a proportion of 80:20 resp.
+```
+
+```{r}
+spam_test <- spam |> slice(-inTrain) 
+
+#The remaining dataset after the slicing for the training (spam_train) is stored in spam_test
+```
+
+### **Learn a Model and Tune Hyperparameters on the Training Data**
+
+```{r}
+fit <- spam_train |>
+  train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+    data = _ ,
+    method = "rpart",
+    control = rpart.control(minsplit = 2),
+    trControl = trainControl(method = "cv", number = 10),
+    tuneLength = 5)
+
+fit
+
+# Here we are training the model with the parameters and hyperparameters are tuned using tunelength.
+```
+
+```{r}
+rpart.plot(fit$finalModel, extra = 2,
+  box.palette = list("Rd", "Bu", "Or","Gy", "Gn", "Bn", "Pu"))
+
+# A model using the best tuning parameters and using all the data supplied to train() is available as fit$finalModel.
+```
+
+The above decision in the best model after tuning the hyperparameters using tunelength. Here it takes dollar, bang, crl.tot and money for arriving at a decision. \
+\
+\
+Printing important scores of each features
+
+```{r}
+varImp(fit)
+```
+
+The above are the importance scores of features. Bang being the most relevant and make not being relevant at all.
+
+Feature importance without competing splits.
+
+```{r}
+imp <- varImp(fit, compete = FALSE)
+imp
+```
+
+The above are the importance score of features without compete. Here n000 and make are 0 and dollar is 100 now.
+
+plotting the importance
+
+```{r}
+ggplot(imp)
+```
+
+## **Testing: Confusion Matrix and Confidence Interval for Accuracy**
+
+```{r}
+pred <- predict(fit, newdata = spam_test)
+pred
+```
+
+```{r}
+confusionMatrix(data = pred, 
+                ref = spam_test |> pull(yesno))
+```
+
+## **Model Comparison**
+
+```{r}
+train_index <- createFolds(spam_train$yesno, k = 10)
+```
+
+Build models
+
+```{r}
+rpartFit <- spam_train |> 
+  train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+        data = _,
+        method = "rpart",
+        tuneLength = 10,
+        trControl = trainControl(method = "cv", indexOut = train_index)
+  )
+```
+
+```{r}
+knnFit <- spam_train |> 
+  train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+        data = _,
+        method = "knn",
+        preProcess = "scale",
+          tuneLength = 10,
+          trControl = trainControl(method = "cv", indexOut = train_index)
+  )
+```
+
+Compare accuracy over all folds.
+
+```{r}
+resamps <- resamples(list(
+        CART = rpartFit,
+        kNearestNeighbors = knnFit
+        ))
+
+summary(resamps)
+```
+
+```{r}
+library(lattice)
+bwplot(resamps, layout = c(3, 1))
+```
+
+The above box plots provides a visual insights into the performance distribution of the models over multiple resampling iterations.We see that kNN is performing slightly better on the folds than CART (except for some outlier folds).
+
+Finding out if one models is statistically better than the other (is the difference in accuracy is not zero).
+
+```{r}
+difs <- diff(resamps)
+difs
+```
+
+```{r}
+summary(difs)
+```
+
+The provided output summarizes a statistical comparison between CART and k-Nearest Neighbors models. K-Nearest Neighbors outperforms CART in accuracy and Kappa statistics, with statistically significant differences after Bonferroni correction, suggesting it's a better model for the given data.
+
+## **Feature Selection and Feature Preparation**
+
+```{r}
+library(FSelector)
+```
+
+### **Univariate Feature Importance Score**
+
+```{r}
+weights <- spam_train |> 
+  chi.squared(yesno ~ crl.tot+dollar+bang+money+n000+make, data = _) |>
+  as_tibble(rownames = "feature") |>
+  arrange(desc(attr_importance))
+
+weights
+```
+
+These scores measure how related each feature is to the class variable. For discrete features (as in our case), the chi-square statistic are used to derive the score.
+
+```{r}
+ggplot(weights,
+  aes(x = attr_importance, y = reorder(feature, attr_importance))) +
+  geom_bar(stat = "identity") +
+  xlab("Importance score") + 
+  ylab("Feature")
+```
+
+The above plot is the importance in descending order (using `reorder` to order factor levels used by `ggplot`). we can see that bang is at the top followed by dollar, money, crl.tot, n000 and make at the last.
+
+Getting the 5 best features
+
+```{r}
+subset <- cutoff.k(weights |> 
+                   column_to_rownames("feature"), 5)
+subset
+```
+
+The above are the top 5 features of this dataset
+
+Use only the best 5 features to build a model (`Fselector` provides `as.simple.formula`)
+
+```{r}
+f <- as.simple.formula(subset, "yesno")
+f
+```
+
+```{r}
+m <- spam_train |> rpart(f, data = _)
+rpart.plot(m, extra = 2, roundint = FALSE)
+```
+
+The above decision tree is built using FSelector and top 5 features obtained previously.
+
+```{r}
+spam_train |> 
+  gain.ratio(yesno ~ crl.tot+dollar+bang+money+n000+make, data = _) |>
+  as_tibble(rownames = "feature") |>
+  arrange(desc(attr_importance))
+
+
+```
+
+### **Feature Subset Selection**
+
+Often features are related and calculating importance for each feature independently is not optimal. We can use greedy search heuristics. For example `cfs` uses correlation/entropy with best first search.
+
+```{r}
+spam_train |> 
+  cfs(yesno ~ crl.tot+dollar+bang+money+n000+make, data = _)
+```
+
+The above features are the result of The "cfs" method which performed feature selection based on correlations between variables and the target variable to identify relevant features.
+
+```{r}
+evaluator <- function(subset) {
+  model <- spam_train |> 
+    train(as.simple.formula(subset, "type"),
+          data = _,
+          method = "rpart",
+          trControl = trainControl(method = "boot", number = 5),
+          tuneLength = 0)
+  results <- model$resample$Accuracy
+  cat("Trying features:", paste(subset, collapse = " + "), "\n")
+  m <- mean(results)
+  cat("Accuracy:", round(m, 2), "\n\n")
+  m
+}
+
+# Overall, this function is used to evaluate the accuracy of a decision tree model (CART) using different subsets of features. It prints the accuracy for each subset and returns the mean accuracy as a measure of model performance.
+```
+
+Start with all features
+
+```{r}
+features <- spam_train |> colnames() |> setdiff("yesno")
+```
+
+### **Using Dummy Variables for Factors**
+
+```{r}
+tree_bang <- spam_train |> 
+  rpart(bang ~ yesno, data = _)
+rpart.plot(tree_bang, roundint = FALSE)
+```
+
+The above tree tell us that for a given bang value, the percentage of it being classified as spam is 61.
+
+```{r}
+Zoo_train_dummy <- as_tibble(class2ind(spam_train$yesno)) |> 
+  mutate(across(everything(), as.factor)) |>
+  add_column(bang = spam_train$bang)
+Zoo_train_dummy
+```
+
+```{r}
+tree_bang <- Zoo_train_dummy |> 
+  rpart(bang ~ ., 
+        data = _,
+        control = rpart.control(minsplit = 2, cp = 0.01))
+rpart.plot(tree_bang, roundint = FALSE)
+```
+
+```{r}
+fit <- spam_train |> 
+  train(bang ~ yesno, 
+        data = _, 
+        method = "rpart",
+        control = rpart.control(minsplit = 2),
+        tuneGrid = data.frame(cp = 0.01))
+fit
+```
+
+The above information describes a CART (Classification and Regression Trees) model. It is trained on 3682 samples with one predictor, without pre-processing. The model's performance was evaluated using bootstrapped resampling with 25 repetitions. The results show root mean squared error (RMSE) of 0.849, R-squared of 0.0637, and mean absolute error (MAE) of 0.287. The tuning parameter 'cp' was fixed at 0.01, indicating no hyperparameter tuning is performed.
+
+## **Class Imbalance**
+
+```{r}
+library(rpart)
+library(rpart.plot)
+```
+
+```{r}
+ggplot(spam, aes(y = yesno)) + geom_bar()
+```
+
+There is not a significant imbalance with the number of records classified as yes and no. There isn't any other features which are nominal which can be used to classfiy whether it is spam or not. Thus this exercise isn't applicable to this dataset.
+
+# **Classification: Alternative Techniques**
+
+## **Install packages**
+
+```{r}
+if(!require(pacman))
+  install.packages("pacman")
+
+pacman::p_load(
+  C50,                # C5.0 Decision Trees and Rule-Based Models
+  caret,              # Classification and Regression Training
+  e1071,              # Misc Functions of the Department of Statistics (e1071), TU Wien
+  keras,              # R Interface to 'Keras'
+  kernlab,            # Kernel-Based Machine Learning Lab
+  lattice,            # Trellis Graphics for R
+  MASS,               # Support Functions and Datasets for Venables and Ripley's MASS
+  mlbench,            # Machine Learning Benchmark Problems
+  nnet,               # Feedforward Neural Networks and Multinomial Log-Linear Models
+  palmerpenguins,     # Palmer Archipelago (Antarctica) Penguin Data
+  party,              # A Laboratory for Recursive Partytioning
+  partykit,           # A Toolkit for Recursive Partytioning
+  randomForest,       # Breiman and Cutler's Random Forests for Classification and Regression
+  rpart,              # Recursive partitioning models
+  RWeka,              # R/Weka Interface
+  scales,             # Scale Functions for Visualization
+  tidymodels,         # Tidy machine learning framework
+  tidyverse,          # Tidy data wrangling and visualization
+  xgboost             # Extreme Gradient Boosting
+)
+```
+
+```{r}
+options(digits=3)
+```
+
+## **Training and Test Data**
+
+```{r}
+set.seed(123)  # for reproducibility
+inTrain <- createDataPartition(y = spam$yesno, p = .8)[[1]]
+spam_train <- dplyr::slice(spam, inTrain)
+spam_test <- dplyr::slice(spam, -inTrain)
+
+#For alternative techniques, we are diviing the dataset into spam_train and spam_test, which are the training and testing sets resp. They are divided in the ratio 80:20.
+```
+
+## **Fitting Different Classification Models to the Training Data**
+
+Creating a fixed sampling scheme (10-folds) so we can compare the fitted models later.
+
+```{r}
+train_index <- createFolds(spam_train$yesno, k = 10)
+```
+
+### **Conditional Inference Tree (Decision Tree)**
+
+```{r}
+ctreeFit <- spam_train |> train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+  method = "ctree",
+  data = _,
+    tuneLength = 5,
+    trControl = trainControl(method = "cv", indexOut = train_index))
+ctreeFit
+
+#The ctreeFit object will contain the results of training a conditional inference tree model using the specified dataset and parameters. 
+```
+
+In the Conditional Inference Tree model, trained on 3682 samples with 6 predictors and 2 classes ('n' and 'y'), without pre-processing, 10-fold cross-validated resampling was performed, with varying levels of the "mincriterion" tuning parameter (ranging from 0.01 to 0.99). The model's performance was evaluated, and the optimal model with the highest accuracy (0.888) and Kappa (0.758) was selected, where the final "mincriterion" value was set at 0.01.
+
+```{r}
+plot(ctreeFit$finalModel)
+```
+
+The above is the output of the best model of conditional Inference Tree model, These trees are constructed in a way that optimizes for accuracy and may create a detailed tree structure to capture intricate relationships in the data. As a result, when we try to visualize the tree, especially for this dataset with multiple predictors, it appears complex and contains multiple branches and nodes.
+
+### **C 4.5 Decision Tree**
+
+```{r}
+C45Fit <- spam_train |> train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+  method = "J48",
+  data = _,
+    tuneLength = 5,
+    trControl = trainControl(method = "cv", indexOut = train_index))
+C45Fit
+
+#The C45Fit object will contain the results of training a C4.5 decision tree model using the specified dataset and parameters. 
+```
+
+In this analysis using C4.5-like decision trees, trained on 3682 samples with 6 predictors and 2 classes ('n' and 'y'), no data pre-processing was performed. Cross-validated (10-fold) resampling was used to evaluate the model's performance across different combinations of tuning parameters (C and M). The highest accuracy (0.891) and Kappa (0.765) were achieved with specific parameter values: C = 0.378 and M = 1, indicating this as the optimal model configuration.
+
+```{r}
+C45Fit$finalModel
+```
+
+The tree provides a set of decision rules based on predictor variables such as 'dollar,' 'money,' 'bang,' 'n000,' 'crl.tot,' and 'make,' allowing for the classification of data points into either 'n' or 'y' based on these rules, with specific conditions and branches defined for each predictor.
+
+### **K-Nearest Neighbors**
+
+```{r}
+knnFit <- spam_train |> train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+  method = "knn",
+  data = _,
+  preProcess = "scale",
+    tuneLength = 5,
+  tuneGrid=data.frame(k = 1:10),
+    trControl = trainControl(method = "cv", indexOut = train_index))
+knnFit
+
+# The knnFit object will contain the results of training a KNN classification model using the specified dataset, preprocessing (scaling), and parameters.
+```
+
+This analysis employed a k-Nearest Neighbors (k-NN) classification model with 3682 samples, 6 predictors, and 2 classes ('n' and 'y'). The data underwent scaling as a preprocessing step. The model's performance was assessed through 10-fold cross-validation, varying the number of neighbors (k) from 1 to 10. The optimal model configuration was chosen based on accuracy, favoring k=1, which yielded the highest accuracy of 96.3% and a Kappa statistic of 0.921.
+
+```{r}
+knnFit$finalModel
+```
+
+The above is the classification done by the best model of knn classifier using the spam training dataset.
+
+### **PART (Rule-based classifier)**
+
+```{r}
+rulesFit <- spam_train |> train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+  method = "PART",
+  data = _,
+  tuneLength = 5,
+  trControl = trainControl(method = "cv", indexOut = train_index))
+rulesFit
+
+#The rulesFit object will contain the results of training a rule-based classification model using the specified dataset and parameters.
+```
+
+In this analysis, a Rule-Based Classifier was applied to a dataset with 3682 samples, 6 predictors, and 2 classes ('n' and 'y'). No pre-processing was performed, and the model's performance was evaluated through 10-fold cross-validation while varying tuning parameters: 'threshold' and 'pruned'. The optimal model configuration was determined based on accuracy, favoring a 'threshold' of 0.133 and 'pruned' setting as 'yes,' resulting in the highest accuracy of 88.6% and a Kappa statistic of 0.756.
+
+```{r}
+rulesFit$finalModel
+```
+
+The provided information represents a decision list generated by a PART (Partial C 4.5) algorithm. The list contains 15 rules used for classifying instances into two classes ('n' and 'y'). Each rule specifies a combination of conditions involving predictor variables such as 'dollar,' 'bang,' 'crl.tot,' 'n000,' 'money,' and 'make.' For each rule, it indicates the predicted class and the associated class distribution. This decision list is used for classification, and the algorithm selects the rule that best matches each instance to make predictions.
+
+### **Linear Support Vector Machines**
+
+```{r}
+svmFit <- spam_train |> train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+  method = "svmLinear",
+  data = _,
+    tuneLength = 5,
+    trControl = trainControl(method = "cv", indexOut = train_index))
+svmFit
+
+# The svmFit object will contain the results of training a linear SVM classification model using the specified dataset and parameters.
+
+```
+
+In this analysis, a Support Vector Machine (SVM) with a linear kernel was employed on a dataset containing 3682 samples with 6 predictors and 2 classes ('n' and 'y'). No pre-processing was applied, and the model's performance was evaluated using 10-fold cross-validation. The SVM achieved an accuracy of 84.5% and a Kappa coefficient of 0.663. The tuning parameter 'C' was kept constant at a value of 1, indicating that regularization strength did not vary during model training.
+
+```{r}
+svmFit$finalModel
+```
+
+The provided information describes a Support Vector Machine (SVM) model with a C-support vector classification (C-svc) objective, indicating it's designed for classification tasks. The model employs a linear kernel function, and the parameter 'cost C' is set to 1, reflecting the regularization strength. The model was trained with a dataset, and it identified 1516 support vectors, which are crucial data points for defining the decision boundary. The objective function value is -1509, and the training error rate is 15.64%, indicating the model's performance on the training data.
+
+### **Random Forest**
+
+```{r}
+randomForestFit <- spam_train |> train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+  method = "rf",
+  data = _,
+    tuneLength = 5,
+    trControl = trainControl(method = "cv", indexOut = train_index))
+randomForestFit
+
+# The randomForestFit object will contain the results of training a Random Forest classification model using the specified dataset and parameters.
+```
+
+In this analysis, a Random Forest model was applied to a dataset with 3682 samples, 6 predictors, and 2 classes ('n' and 'y'). No pre-processing was performed. The model's performance was assessed using 10-fold cross-validation, with varying 'mtry' values, representing the number of predictors considered at each split. The optimal model configuration was determined based on accuracy, favoring 'mtry' set to 6, which yielded the highest accuracy of 96.4% and a Kappa statistic of 0.923, signifying excellent classification performance.
+
+```{r}
+randomForestFit$finalModel
+```
+
+The output is from a Random Forest classification model with 500 trees and 6 predictors randomly selected for consideration at each split. Out-of-bag (OOB) estimation indicates an error rate of 12.5%. The confusion matrix shows that among the 'n' class, 2050 samples were correctly classified, 181 were misclassified, resulting in a class error of 8.11%. For the 'y' class, 1172 were correctly classified, 279 were misclassified, with a class error of 19.23%.
+
+### **Gradient Boosted Decision Trees (xgboost)**
+
+```{r}
+xgboostFit <- spam_train |> train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+  method = "xgbTree",
+  data = _,
+  tuneLength = 5,
+  trControl = trainControl(method = "cv", indexOut = train_index),
+  tuneGrid = expand.grid(
+    nrounds = 20,
+    max_depth = 3,
+    colsample_bytree = .6,
+    eta = 0.1,
+    gamma=0,
+    min_child_weight = 1,
+    subsample = .5
+  ))
+xgboostFit
+
+# This is a classification model using XGBoost with hyperparameter tuning. It uses the "xgbTree" method, applies cross-validation, and explores different hyperparameter combinations. The tuning grid includes parameters like the number of boosting rounds, tree depth, and subsampling rate. xgboostFit contains the model with the optimal parameter configuration.
+```
+
+The information pertains to an eXtreme Gradient Boosting (XGBoost) model applied to a dataset with 3682 samples, 6 predictors, and 2 classes ('n' and 'y'). No pre-processing was performed. The model's performance was assessed using 10-fold cross-validation, resulting in an accuracy of 86.9% and a Kappa statistic of 0.716. Several tuning parameters were held constant, including 'nrounds,' 'max_depth,' 'eta,' 'gamma,' 'colsample_bytree,' 'min_child_weight,' and 'subsample,' indicating that the model's hyperparameters were not varied during the tuning process.\
+\
+
+```{r}
+xgboostFit$finalModel
+```
+
+The output shows the configuration of hyperparameters for an eXtreme Gradient Boosting (XGBoost) model, including 20 boosting rounds, a maximum tree depth of 3, a learning rate of 0.1, no minimum loss reduction requirement for partitioning nodes, a 60% random sampling of features during tree growth, a minimum child weight of 1, and a 50% subsample of the training data for each boosting round. These parameters significantly influence the model's behavior and performance.
+
+### **Artificial Neural Network**
+
+```{r}
+nnetFit <- spam_train |> train(yesno ~ crl.tot+dollar+bang+money+n000+make,
+  method = "nnet",
+  data = _,
+    tuneLength = 5,
+    trControl = trainControl(method = "cv", indexOut = train_index),
+  trace = FALSE)
+nnetFit
+
+# Here we train a neural network (nnet) classification model using the caret package. It employs cross-validation for evaluation and hyperparameter tuning. The nnetFit object stores the results, including the best neural network model configuration determined during hyperparameter tuning.
+```
+
+\
+The results are of thea bove mentioned neural network model. It was tested on 3682 samples with 6 predictor variables and aimed at binary classification ('n' or 'y'). The model went through 10-fold cross-validation, with varying combinations of two key hyperparameters: 'size' and 'decay.' The optimal configuration, chosen for its highest accuracy, had 'size' set to 7 and 'decay' at 0.1, resulting in an accuracy of 87.9% and a Kappa value of 0.74. These parameters determine the architecture and learning rate of the neural network and significantly impact its predictive performance.
+
+```{r}
+nnetFit$finalModel
+```
+
+The described neural network is a 6-7-1 architecture with 57 weights. It takes six input features (crl.tot, dollar, bang, money, n000, make) and produces one output labeled ".outcome." It uses entropy-based fitting and has a learning rate decay of 0.1. The 57 weights are crucial for learning and predicting outcomes. This network is tailored for a specific classification task and aims to capture complex patterns in the data to make accurate predictions.
+
+## **Comparing Models**
+
+Collect the performance metrics from the models trained on the same data.
+
+```{r}
+resamps <- resamples(list(
+  ctree = ctreeFit,
+  C45 = C45Fit,
+  SVM = svmFit,
+  KNN = knnFit,
+  rules = rulesFit,
+  randomForest = randomForestFit,
+  xgboost = xgboostFit,
+  NeuralNet = nnetFit
+    ))
+resamps
+```
+
+These models were evaluated using 10 resamples and assessed based on performance metrics such as Accuracy and Kappa. The process also estimated the time required for various tasks, including model fitting and overall execution.
+
+Calculating summary statistics
+
+```{r}
+summary(resamps)
+```
+
+The summary provides a comparison of multiple machine learning models using accuracy and Kappa metrics. Each model's performance is summarized with statistics, revealing that randomForest achieved the highest accuracy and Kappa, while ctree and C45 also performed well. The summary aids in model selection for classification tasks.
+
+```{r}
+library(lattice)
+bwplot(resamps, layout = c(3, 1))
+```
+
+This plot provides insights into the variability of model performance across different algorithms and can help in model selection and comparison.
+
+```{r}
+difs <- diff(resamps)
+difs
+```
+
+The output is the result of comparing resampling results across various machine learning models (models) and performance metrics (metrics) for differences using the "diff.resamples" function. It identifies a total of 28 differences and uses Bonferroni correction for p-value adjustment, indicating variations in model performance across the specified models and metrics.
+
+```{r}
+summary(difs)
+```
+
+The output summarizes the statistical differences (difs) in model performance (Accuracy and Kappa) among various machine learning models. It provides the estimated differences and p-values for pairwise model comparisons. Statistically significant differences are observed, indicating variations in performance between models. Bonferroni correction is applied to control for multiple comparisons.
+
+## **Applying the Chosen Model to the Test Data**
+
+From the above summary, random forest would be a good choice if we consider both accuracy and Kappa metrics.
+
+```{r}
+pr <- predict(randomForestFit, spam_test)
+pr
+```
+
+Calculate the confusion matrix for the held-out test data.
+
+```{r}
+confusionMatrix(pr, reference = spam_test$yesno)
+
+```
+
+The confusion matrix shows the classification performance of a model. In this case, the model correctly predicted 515 instances of class 'n' and 288 instances of class 'y', while making 74 false negative predictions and 42 false positive predictions. The model has an accuracy of 87.4%, indicating its overall correctness. The Kappa statistic measures the model's performance, with a value of 0.731 suggesting substantial agreement. Sensitivity and specificity show the model's ability to detect true positives and true negatives, and the balanced accuracy is 86%. The McNemar's Test p-value of 0.004 indicates a significant difference between the model's predictions and random chance.
+
+## **Comparing Decision Boundaries of Popular Classification Techniques**
+
+```{r}
+library(scales)
+library(tidyverse)
+library(ggplot2)
+library(caret)
+
+decisionplot <- function(model, data, class_var, 
+  predict_type = c("class", "prob"), resolution = 3 * 72) {
+  # resolution is set to 72 dpi if the image is rendered  3 inches wide. 
+  
+  y <- data |> pull(class_var)
+  x <- data |> dplyr::select(-all_of(class_var))
+  
+  # resubstitution accuracy
+  prediction <- predict(model, x, type = predict_type[1])
+  # LDA returns a list
+  if(is.list(prediction)) prediction <- prediction$class
+  prediction <- factor(prediction, levels = levels(y))
+  
+  cm <- confusionMatrix(data = prediction, 
+                        reference = y)
+  acc <- cm$overall["Accuracy"]
+  
+  # evaluate model on a grid
+  r <- sapply(x[, 1:2], range, na.rm = TRUE)
+  xs <- seq(r[1,1], r[2,1], length.out = resolution)
+  ys <- seq(r[1,2], r[2,2], length.out = resolution)
+  g <- cbind(rep(xs, each = resolution), rep(ys, time = resolution))
+  colnames(g) <- colnames(r)
+  g <- as_tibble(g)
+  
+  ### guess how to get class labels from predict
+  ### (unfortunately not very consistent between models)
+  cl <- predict(model, g, type = predict_type[1])
+  
+  # LDA returns a list
+  prob <- NULL
+  if(is.list(cl)) { 
+    prob <- cl$posterior
+    cl <- cl$class
+  } else
+    if(!is.na(predict_type[2]))
+      try(prob <- predict(model, g, type = predict_type[2]))
+  
+  # we visualize the difference in probability/score between the 
+  # winning class and the second best class.
+  # don't use probability if predict for the classifier does not support it.
+  max_prob <- 1
+  if(!is.null(prob))
+    try({
+      max_prob <- t(apply(prob, MARGIN = 1, sort, decreasing = TRUE))
+      max_prob <- max_prob[,1] - max_prob[,2]
+    }, silent = TRUE) 
+  
+  cl <- factor(cl, levels = levels(y))
+  
+  g <- g |> add_column(prediction = cl, probability = max_prob)
+  
+  ggplot(g, mapping = aes(
+    x = .data[[colnames(g)[1]]], y = .data[[colnames(g)[2]]])) +
+    geom_raster(mapping = aes(fill = prediction, alpha = probability)) +
+    geom_contour(mapping = aes(z = as.numeric(prediction)), 
+      bins = length(levels(cl)), linewidth = .5, color = "black") +
+    geom_point(data = data, mapping =  aes(
+      x = .data[[colnames(data)[1]]], 
+      y = .data[[colnames(data)[2]]],
+      shape = .data[[class_var]]), alpha = .7) + 
+    scale_alpha_continuous(range = c(0,1), limits = c(0,1), guide = "none") +  
+    labs(subtitle = paste("Training accuracy:", round(acc, 2))) +
+     theme_minimal(base_size = 14)
+}
+```
+
+```{r}
+#Preprocessing
+
+set.seed(123)  # Set a seed for reproducibility
+
+x <- as_tibble(spam) %>%
+  drop_na() %>%
+  sample_n(150)  # Sample 150 points
+
+x <- x %>%
+  dplyr::select(dollar, bang, yesno) %>%
+  mutate(money = scale(dollar), dollar = scale(bang))
+
+set.seed(123)
+n <- 100
+x <- tibble(
+  dollar = replicate(n, rnorm(1)),
+  bang = replicate(n, rnorm(1)),
+  yesno = factor(sample(c("y", "n"), n, replace = TRUE))
+)
+
+#The above code is done so that the bang and dollar values are scaled and are in the xy plane which makes the classification much more easier for the classifiers and also comprehensible for viewers. The scatterplot of bang and dollar values are not in the xy plane and most of the values are along the x and y axes, thus the above code is the only way to visualize the classification done by the classifier for this dataset.
+```
+
+```{r}
+# visualizing the datapoints after scaling the bang and dollar values
+
+ggplot(x, aes(x = dollar, y = bang, fill = yesno)) +  
+  stat_density_2d(geom = "polygon", aes(alpha = after_stat(level))) +
+  geom_point() +
+  theme_minimal(base_size = 14) +
+  labs(x = "dollar",
+       y = "bang",
+       fill = "Yes/No",
+       alpha = "Density")
+```
+
+The above plot is the scatter plot of dollar vs bang features. They are classified into yes or no and the intensity denotes the concentration of data.
+
+#### K-Nearest Neighbors Classifier
+
+```{r}
+
+model <- x |> caret::knn3(yesno ~ ., data = _, k = 1)
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "kNN (1 neighbor)",
+       x = "dollar",
+       y = "bang",
+       shape = "Yes/No",
+       fill = "Prediction")
+
+# This code builds a k-Nearest Neighbors (kNN) classification model with one neighbor and visualizes its decision boundaries based on the 'dollar' and 'bang' features, showing how it predicts the 'yesno' class.
+```
+
+The above plot is the kNN model with 1 neighbor. We can say that the model is overfitting which can be explained by the high accuracy.
+
+```{r}
+# 3 Neighbours
+
+model <- x |> caret::knn3(yesno ~ ., data = _, k = 3)
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "kNN (3 neighbor)",
+       x = "dollar",
+       y = "bang",
+       shape = "Yes/No",
+       fill = "Prediction")
+```
+
+The above plot is the kNN model using k as 3, the decision boundaries are still sharp but not as sharp as when k was 1. The accuracy also got hit and got reduced to 77
+
+```{r}
+# 9 Neighbours
+
+model <- x |> caret::knn3(yesno ~ ., data = _, k = 9)
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "kNN (9 neighbor)",
+       x = "dollar",
+       y = "bang",
+       shape = "Yes/No",
+       fill = "Prediction")
+```
+
+The above graph is the kNN model with 9 neighbors. The boundaries are smoother when compared to the previous models and accuracy also got reduced accordingly.
+
+#### Naive Bayes Classifier
+
+```{r}
+model <- x |> e1071::naiveBayes(yesno ~ ., data = _)
+decisionplot(model, x, class_var = "yesno", 
+  predict_type = c("class", "raw")) + 
+  labs(title = "naive Bayes",
+       shape = "Yes/No",
+       fill = "Prediction")
+
+#This code builds a naive bayes classifier and prints the model using decisionplot()
+```
+
+The above plot depicts the Naive Bayes model (probablistic) classfication of dollar and bang features. The boundaries are smooth and accuracy is 64
+
+#### Linear Discriminant Analysis
+
+```{r}
+model <- x |> MASS::lda(yesno ~ ., data = _)
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "LDA",
+       shape = "Yes/No",
+       fill = "Prediction")
+
+#This code builds a LDA classifier and prints the model using decisionplot()
+```
+
+The above LDA model shows a linear separation, as it is a linear classifier.
+
+#### Logistic Regression (implemented in nnet)
+
+```{r}
+model <- spam |> nnet::multinom(yesno ~dollar+bang, data = _)
+```
+
+This log likely represents an optimization process with four weights, where the initial value was 3189.17. After 30 iterations, it converged to a final value of 2407.38, indicating successful minimization of the objective function.
+
+```{r}
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "Multinomial Logistic Regression",
+       x = "dollar",
+       y = "bang",
+       shape = "Yes/No",
+       fill = "Prediction")
+
+#This and the previous code builds a Logistic regression classifier and prints the model using decisionplot()
+```
+
+The above Multinomial logistic regression plot shows the classification of dollar and bang feature value along the bang-dollar space. The shapes are the actual datapoints and colors represents the prediction.
+
+#### Decision Trees
+
+```{r}
+model <- spam |> rpart::rpart(yesno ~ dollar+bang, data = _)
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "CART",
+       x = "dollar",
+       y = "bang",
+       shape = "Yes/No",
+       fill = "Prediction")
+
+#This code builds a Decision trees and prints the model using decisionplot()
+```
+
+The above decision tree plot showcases the decision boundaries created by the CART model. It classifies the features in the feature space (by space)
+
+```{r}
+model <- x |> rpart::rpart(yesno ~ ., data = _,
+  control = rpart.control(cp = 0.001, minsplit = 1))
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "CART (overfitting)",
+       x = "dollar",
+       y = "bang",
+       shape = "Yes/No",
+       fill = "Prediction")
+
+```
+
+The above decision tree's boundaries are slightly more complex than the standard CART model. The accuracy is also 1 which could indicate overfitting
+
+```{r}
+model <- x |> C50::C5.0(yesno ~ ., data = _)
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "C5.0",
+       x = "dollar",
+       y = "bang",
+       shape = "Yes/No",
+       fill = "Prediction")
+```
+
+The above is the classification done using C5.0 model.
+
+#### Random Forest
+
+```{r}
+model <- x |> randomForest::randomForest(yesno ~ ., data = _)
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "Random Forest",
+       x = "dollar",
+       y = "bang",
+       shape = "Yes/No",
+       fill = "Prediction")
+
+#This code builds a random forest model and prints the model using decisionplot()
+```
+
+The classifier's decision boundaries show the numerous decision of multiple decision trees.
+
+#### SVM
+
+##### Linear kernel
+
+```{r}
+model <- x |> e1071::svm(yesno ~ ., data = _, kernel = "linear")
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "SVM (linear kernel)",
+       shape = "Yes/No",
+       fill = "Prediction")
+
+#This code builds a svm model and prints the model using decisionplot()
+```
+
+As the above kernel is linear, the separation is linear amongst the features.
+
+#### Radial Kernel
+
+```{r}
+model <- x |> e1071::svm(yesno ~ ., data = _, kernel = "radial")
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "SVM (radial kernel)",
+       shape = "Yes/No",
+       fill = "Prediction")
+```
+
+The above depitcs the decision boundaries for the radial SVM. From thr plot we can see that it created flexible boundaries compared to the linear SVM.
+
+#### Polynomial kernel
+
+```{r}
+model <- x |> e1071::svm(yesno ~ ., data = _, kernel = "polynomial")
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "SVM (polynomial kernel)",
+       shape = "Yes/No",
+       fill = "Prediction")
+```
+
+The above plot depicts the decision boundaries for the polynomial SVM. As they are polynomial, it is curved.
+
+#### Sigmoid kernel
+
+```{r}
+model <- x |> e1071::svm(yesno ~ ., data = _, kernel = "sigmoid")
+decisionplot(model, x, class_var = "yesno") + 
+  labs(title = "SVM (sigmoid kernel)",
+       shape = "Yes/No",
+       fill = "Prediction")
+```
+
+The above plot depicts the decision boundaries for the sigmoid SVM. The sigmoid kernel also produces flexible boundaries but they are more along the dollar axis.
+
+#### Single Layer Feed-forward Neural Networks
+
+```{r}
+model <- x |> nnet::nnet(yesno ~ ., data = _, size = 1, trace = FALSE)
+decisionplot(model, x, class_var = "yesno", 
+  predict_type = "class") + 
+  labs(title = "NN (1 neuron)",
+       shape = "Yes/No",
+       fill = "Prediction")
+
+#This code builds a single layer fee-forward neural networks and prints the model using decisionplot()
+```
+
+The above neural network with 1 neuron has created a decision boundary similar to a linear classifier to classify the data.
+
+```{r}
+model <-x |> nnet::nnet(yesno ~ ., data = _, size = 2, trace = FALSE)
+decisionplot(model, x, class_var = "yesno", 
+  predict_type = c("class")) + 
+  labs(title = "NN (2 neurons)",
+       shape = "Yes/No",
+       fill = "Prediction")
+```
+
+The above boundaries are basically construted by 2 neuron and they are classify using multiple-line like boundaries.
+
+```{r}
+model <-x |> nnet::nnet(yesno ~ ., data = _, size = 4, trace = FALSE)
+decisionplot(model, x, class_var = "yesno", 
+  predict_type = c("class")) + 
+  labs(title = "NN (4 neurons)",
+       shape = "Yes/No",
+       fill = "Prediction")
+```
+
+The above plot depicts the boundaries with 4 neurons, the decision boundary appears more complex . This is better than the previous versions.
+
+```{r}
+model <-x |> nnet::nnet(yesno ~ ., data = _, size = 10, trace = FALSE)
+decisionplot(model, x, class_var = "yesno", 
+  predict_type = c("class")) + 
+  labs(title = "NN (10 neurons)",
+       shape = "Yes/No",
+       fill = "Prediction")
+```
+
+The above plot depicts the neural network with 10 neurons. The boundaries are highly flexible. They are fitting the data very well. This can also mean they could be overfitting. But the accuracy is pretty decent at 80.
